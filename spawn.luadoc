@@ -30,6 +30,6 @@ module('os')
 --   `exit_cb` or testing if `debug.getupvalue(p, 1)` is `nil`.
 -- @usage os.spawn(nil, { 'lua', buffer.filename }, nil, nil, print)
 -- @usage p = os.spawn(nil, { 'lua', '-e', 'print(io.read())' }, nil, '', print)
---        p('foo\n')
+--        p('foo\\n')
 -- @see _G._CHARSET
 function spawn(working_dir, argv, env, stdin, stdout_cb, stderr_cb, exit_cb) end
