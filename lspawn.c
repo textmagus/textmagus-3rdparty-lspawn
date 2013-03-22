@@ -213,7 +213,7 @@ static int spawn(lua_State *L) {
     S->stdout = stdout;
     S->stderr = stderr;
     S->stdout_callback_ref = l_callback_ref(L, 5);
-    S->stderr_callback_ref = l_callback_ref(L, 7);
+    S->stderr_callback_ref = l_callback_ref(L, 6);
     S->exit_callback_ref = l_callback_ref(L, 7);
     lua_pushlightuserdata(L, (void *)S);
     lua_pushcclosure(L, spawn_input, 1);
