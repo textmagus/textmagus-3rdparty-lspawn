@@ -200,8 +200,9 @@ static int spawn(lua_State *L) {
   GSpawnFlags flags = G_SPAWN_DO_NOT_REAP_CHILD | G_SPAWN_SEARCH_PATH;
   GPid pid;
   int stdin, stdout, stderr;
-  if (g_spawn_async_with_pipes(working_dir, argv, envp, flags, NULL, NULL, &pid,
-                               &stdin, &stdout, &stderr, NULL)) {
+  if (g_spawn_async_with_pipes(working_dir, argv, (n3 > 0) ? envp : NULL, flags,
+                               NULL, NULL, &pid, &stdin, &stdout, &stderr,
+                               NULL)) {
     luaL_argcheck(L, lua_isnone(L, 4) || lua_type(L, 4) == LUA_TSTRING ||
                      lua_isnil(L, 4), 4, "string stdin or nil expected");
     if (!lua_isnone(L, 4) && !lua_isnil(L, 4))
