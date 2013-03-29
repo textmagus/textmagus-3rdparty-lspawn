@@ -57,14 +57,16 @@ static gboolean std_(GIOChannel *ch, GIOCondition cond, lua_State *L, int ref) {
   if (!(cond & G_IO_IN)) return FALSE;
   char buf[1024];
   gsize len = 0;
-  int status = g_io_channel_read_chars(ch, buf, 1024, &len, NULL);
-  if (status == G_IO_STATUS_NORMAL && len > 0) {
-    lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
-    if (lua_isfunction(L, -1)) {
-      lua_pushlstring(L, buf, len);
-      lua_pcall(L, 1, 0, 0);
-    } else lua_pop(L, 1); // non-function
-  }
+  do {
+    int status = g_io_channel_read_chars(ch, buf, 1024, &len, NULL);
+    if (status == G_IO_STATUS_NORMAL && len > 0) {
+      lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+      if (lua_isfunction(L, -1)) {
+        lua_pushlstring(L, buf, len);
+        lua_pcall(L, 1, 0, 0);
+      } else lua_pop(L, 1); // non-function
+    }
+  } while (len == 1024);
   return !(cond & G_IO_HUP);
 }
 
