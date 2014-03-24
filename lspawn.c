@@ -1,235 +1,247 @@
-// Copyright 2012-2013 Mitchell mitchell<att>foicica.com. See LICENSE.
+// Copyright 2012-2014 Mitchell mitchell<att>foicica.com. See LICENSE.
 
+#define _STDSTREAM_DEFINED // Win32
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-#include <gtk/gtk.h>
-#if !_WIN32
-#include <signal.h>
-#else
+#include <glib.h>
+#if _WIN32
 #include <windows.h>
-#define stdin _stdin
-#define stdout _stdout
-#define stderr _stderr
-#define kill TerminateProcess
-#define SIGKILL 0
+#include <fcntl.h>
+#define waitpid(pid, ...) WaitForSingleObject(pid, INFINITE)
+#define write(fd, s, len) WriteFile(fd, s, len, NULL, NULL)
+#define kill(pid, _) TerminateProcess(pid, 0)
+#define g_io_channel_unix_new g_io_channel_win32_new_fd
+#define close CloseHandle
+#define FD(handle) _open_osfhandle((intptr_t)handle, _O_RDONLY)
 #endif
 
 #include "lua.h"
 #include "lualib.h"
 #include "lauxlib.h"
 
+#define l_setcfunction(l, n, name, f) \
+  (lua_pushcfunction(l, f), lua_setfield(l, (n > 0) ? n : n - 1, name))
+#define l_reffunction(l, n) \
+  (luaL_argcheck(l, lua_isfunction(l, n) || lua_isnoneornil(l, n), n, \
+                 "function or nil expected"), \
+   lua_pushvalue(l, n), luaL_ref(l, LUA_REGISTRYINDEX))
+
 typedef struct {
   lua_State *L;
-  GPid pid;
-  int stdin;
-  int stdout;
-  int stderr;
-  int stdout_callback_ref;
-  int stderr_callback_ref;
-  int exit_callback_ref;
-  int stdin_ref;
-} spawn_state;
+#if !_WIN32
+  int pid, stdin, stdout, stderr;
+#else
+  HANDLE pid, stdin, stdout, stderr;
+#endif
+  GIOChannel *_stdout, *_stderr;
+  int stdout_cb, stderr_cb, exit_cb;
+} PStream;
 
-/**
- * Returns a Lua reference to the Lua function at the given stack position.
- * @param L The Lua state.
- * @param narg Position of the Lua function on the stack.
- * @return Lua reference or LUA_REFNIL
- */
-static int l_callback_ref(lua_State *L, int narg) {
-  luaL_argcheck(L, lua_isnone(L, narg) || lua_type(L, narg) == LUA_TFUNCTION ||
-                   lua_isnil(L, narg), narg, "function or nil expected");
-  lua_pushvalue(L, narg);
-  return luaL_ref(L, LUA_REGISTRYINDEX);
+/** p:status() Lua function. */
+static int lp_status(lua_State *L) {
+  PStream *p = (PStream *)luaL_checkudata(L, 1, "ta_spawn");
+  lua_pushstring(L, p->pid ? "running" : "terminated");
+  return 1;
 }
 
-/**
- * Helper for reading stdout or stderr and passing it to the appropriate Lua
- * callback function.
- * @param ch GIOChannel.
- * @param cond GIOCondition.
- * @param L The Lua state.
- * @param ref The Lua reference for callback function.
- */
-static gboolean std_(GIOChannel *ch, GIOCondition cond, lua_State *L, int ref) {
+/** p:wait() Lua function. */
+static int lp_wait(lua_State *L) {
+  PStream *p = (PStream *)luaL_checkudata(L, 1, "ta_spawn");
+  luaL_argcheck(L, p->pid, 1, "process terminated");
+  waitpid(p->pid, NULL, 0);
+  return 0;
+}
+
+/** p:write() Lua function. */
+static int lp_write(lua_State *L) {
+  PStream *p = (PStream *)luaL_checkudata(L, 1, "ta_spawn");
+  luaL_argcheck(L, p->pid, 1, "process terminated");
+  size_t len;
+  const char *s = luaL_checklstring(L, 2, &len);
+  write(p->stdin, s, len);
+  return 0;
+}
+
+/** p:kill() Lua function. */
+static int lp_kill(lua_State *L) {
+  PStream *p = (PStream *)luaL_checkudata(L, 1, "ta_spawn");
+  if (p->pid) kill(p->pid, SIGKILL), p->pid = 0;
+  return 0;
+}
+
+/** tostring(p) Lua function. */
+static int lp_tostring(lua_State *L) {
+  PStream *p = (PStream *)luaL_checkudata(L, 1, "ta_spawn");
+  if (p->pid)
+    lua_pushfstring(L, "process (pid=%d)", p->pid);
+  else
+    lua_pushstring(L, "process (terminated)");
+  return 1;
+}
+
+/** Signal that channel output is available for reading. */
+static int ch_read(GIOChannel *source, GIOCondition cond, void *data) {
+  PStream *p = (PStream *)data;
   if (!(cond & G_IO_IN)) return FALSE;
-  char buf[1024];
-  gsize len = 0;
+  char buf[BUFSIZ];
+  size_t len = 0;
   do {
-    int status = g_io_channel_read_chars(ch, buf, 1024, &len, NULL);
-    if (status == G_IO_STATUS_NORMAL && len > 0) {
-      lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
-      if (lua_isfunction(L, -1)) {
-        lua_pushlstring(L, buf, len);
-        lua_pcall(L, 1, 0, 0);
-      } else lua_pop(L, 1); // non-function
+    int status = g_io_channel_read_chars(source, buf, BUFSIZ, &len, NULL);
+    int r = (source == p->_stdout) ? p->stdout_cb : p->stderr_cb;
+    if (status == G_IO_STATUS_NORMAL && len > 0 && r != LUA_REFNIL) {
+      lua_rawgeti(p->L, LUA_REGISTRYINDEX, r);
+      lua_pushlstring(p->L, buf, len);
+      lua_pcall(p->L, 1, 0, 0);
     }
-  } while (len == 1024);
+  } while (len == BUFSIZ);
   return !(cond & G_IO_HUP);
 }
 
 /**
- * Callback for when child stdout has data to read.
- * @param source GIOChannel.
- * @param cond GIOCondition.
- * @param data spawn_state.
+ * Creates a new channel that monitors a file descriptor for output.
+ * @param fd File descriptor returned by `g_spawn_async_with_pipes()` or
+ *   `_open_osfhandle()`.
+ * @param p PStream to notify when output is available for reading.
  */
-static gboolean s_stdout(GIOChannel *source, GIOCondition cond, gpointer data) {
-  spawn_state *S = (spawn_state *)data;
-  return std_(source, cond, S->L, S->stdout_callback_ref);
-}
-
-/**
- * Callback for when child stderr has data to read.
- * @param source GIOChannel.
- * @param cond GIOCondition.
- * @param data spawn_state.
- */
-static gboolean s_stderr(GIOChannel *source, GIOCondition cond, gpointer data) {
-  spawn_state *S = (spawn_state *)data;
-  return std_(source, cond, S->L, S->stderr_callback_ref);
-}
-
-/**
- * Adds a callback for the given file descriptor when data is available to read.
- * @param fd File descriptor returned by `g_spawn_async_with_pipes`.
- * @param S Spawn state.
- * @param out `TRUE` for stdout; stderr otherwise.
- */
-static void add_io_callback(int fd, spawn_state *S, int out) {
-#if !_WIN32
+static GIOChannel *new_channel(int fd, PStream *p) {
   GIOChannel *channel = g_io_channel_unix_new(fd);
-#else
-  GIOChannel *channel = g_io_channel_win32_new_fd(fd);
-#endif
   g_io_channel_set_encoding(channel, NULL, NULL);
   g_io_channel_set_buffered(channel, FALSE);
-  g_io_add_watch(channel, G_IO_IN | G_IO_HUP, out ? s_stdout : s_stderr, S);
+  g_io_add_watch(channel, G_IO_IN | G_IO_HUP, ch_read, p);
   g_io_channel_unref(channel);
+  return channel;
 }
 
-/**
- * Callback for when child process exits.
- * @param pid Child pid.
- * @param status Exit status.
- * @param data spawn_state.
- */
-static void s_exit(GPid pid, int status, gpointer data) {
-  spawn_state *S = (spawn_state *)data;
-  lua_State *L = S->L;
-  lua_rawgeti(L, LUA_REGISTRYINDEX, S->exit_callback_ref);
-  if (lua_isfunction(L, -1)) {
-    lua_pushinteger(L, status);
-    lua_pcall(L, 1, 0, 0);
-  } else lua_pop(L, 1); // non-function
-
-  // Release resources.
-  close(S->stdin);
-  close(S->stdout);
-  close(S->stderr);
-  luaL_unref(L, LUA_REGISTRYINDEX, S->stdout_callback_ref);
-  luaL_unref(L, LUA_REGISTRYINDEX, S->stderr_callback_ref);
-  luaL_unref(L, LUA_REGISTRYINDEX, S->exit_callback_ref);
-  lua_rawgeti(L, LUA_REGISTRYINDEX, S->stdin_ref);
-  lua_pushnil(L);
-  lua_setupvalue(L, -2, 1);
-  lua_pop(L, 1); // cclosure
-  luaL_unref(L, LUA_REGISTRYINDEX, S->stdin_ref);
-  g_spawn_close_pid(S->pid);
-  free(S);
-}
-
-/**
- * Function for writing a given string to stdin of spawned process.
- * A `nil` parameter kills the process.
- * @param L The Lua state.
- */
-static int spawn_input(lua_State *L) {
-  if (!lua_isnil(L, lua_upvalueindex(1))) {
-    spawn_state *S = (spawn_state *)lua_touserdata(L, lua_upvalueindex(1));
-    if (!lua_isnil(L, 1))
-      write(S->stdin, luaL_checkstring(L, 1), lua_rawlen(L, 1));
-    else
-      kill(S->pid, SIGKILL);
-  } else luaL_error(L, "invalid stdin (process finished)");
-  return 0;
-}
-
-/**
- * Spawns a process.
- * The Lua parameters given are string working directory, string or table of
- * args for argv, environment table, stdin, stdout callback function, stderr
- * callback function, and exit callback function.
- * Pushes a closure onto the stack that accepts stdin.
- * @param L The Lua state.
- */
-static int spawn(lua_State *L) {
-  const char *working_dir = lua_tostring(L, 1);
-
-  int i, n2, type2 = lua_type(L, 2);
-  luaL_argcheck(L, type2 == LUA_TSTRING || type2 == LUA_TTABLE, 2,
-                "string or table of args expected");
-  n2 = (type2 == LUA_TTABLE) ? lua_rawlen(L, 2) : 1;
-  char *argv[n2 + 1];
-  if (type2 == LUA_TTABLE) {
-    for (i = 0; i < n2; i++) {
-      lua_rawgeti(L, 2, i + 1);
-      luaL_argcheck(L, lua_type(L, -1) == LUA_TSTRING, 2,
-                    "string arg expected in args table");
-      argv[i] = (char *)lua_tostring(L, -1);
-      lua_pop(L, 1); // arg
-    }
-  } else argv[0] = (char *)lua_tostring(L, 2);
-  argv[n2] = NULL;
-
-  int j, n3, type3 = lua_type(L, 3);
-  if (!lua_isnone(L, 3) && !lua_isnil(L, 3)) {
-    luaL_argcheck(L, lua_istable(L, 3), 3, "table of envs expected");
-    n3 = lua_rawlen(L, 3);
-  } else n3 = 0;
-  char *envp[n3 + 1];
-  for (j = 0; j < n3; j++) {
-    lua_rawgeti(L, 3, j + 1);
-    luaL_argcheck(L, lua_type(L, -1) == LUA_TSTRING, 2,
-                  "string env expected in envs table");
-    envp[j] = (char *)lua_tostring(L, -1);
-    lua_pop(L, 1); // env
+/** Signal that the child process finished. */
+static void p_exit(GPid pid, int status, void *data) {
+  PStream *p = (PStream *)data;
+  if (p->exit_cb != LUA_REFNIL) {
+    lua_rawgeti(p->L, LUA_REGISTRYINDEX, p->exit_cb);
+    lua_pushinteger(p->L, status);
+    lua_pcall(p->L, 1, 0, 0);
   }
-  envp[n3] = NULL;
-
-  GSpawnFlags flags = G_SPAWN_DO_NOT_REAP_CHILD | G_SPAWN_SEARCH_PATH;
-  GPid pid;
-  int stdin, stdout, stderr;
-  if (g_spawn_async_with_pipes(working_dir, argv, (n3 > 0) ? envp : NULL, flags,
-                               NULL, NULL, &pid, &stdin, &stdout, &stderr,
-                               NULL)) {
-    luaL_argcheck(L, lua_isnone(L, 4) || lua_type(L, 4) == LUA_TSTRING ||
-                     lua_isnil(L, 4), 4, "string stdin or nil expected");
-    if (!lua_isnone(L, 4) && !lua_isnil(L, 4))
-      write(stdin, lua_tostring(L, 4), lua_rawlen(L, 4));
-    spawn_state *S = (spawn_state *)malloc(sizeof(spawn_state));
-    S->L = L;
-    S->pid = pid;
-    S->stdin = stdin;
-    S->stdout = stdout;
-    S->stderr = stderr;
-    S->stdout_callback_ref = l_callback_ref(L, 5);
-    S->stderr_callback_ref = l_callback_ref(L, 6);
-    S->exit_callback_ref = l_callback_ref(L, 7);
-    lua_pushlightuserdata(L, (void *)S);
-    lua_pushcclosure(L, spawn_input, 1);
-    lua_pushvalue(L, -1); // duplicate for return since luaL_ref pops
-    S->stdin_ref = luaL_ref(L, LUA_REGISTRYINDEX);
-    add_io_callback(stdout, S, TRUE);
-    add_io_callback(stderr, S, FALSE);
-    g_child_watch_add(pid, s_exit, S);
-    return 1;
-  } else luaL_error(L, "could not spawn process");
-
-  return 0;
+#if _WIN32
+  close(p->pid);
+#endif
+  close(p->stdin), close(p->stdout), close(p->stderr);
+  luaL_unref(p->L, LUA_REGISTRYINDEX, p->stdout_cb);
+  luaL_unref(p->L, LUA_REGISTRYINDEX, p->stderr_cb);
+  luaL_unref(p->L, LUA_REGISTRYINDEX, p->exit_cb);
+  p->pid = 0;
 }
 
-int luaopen_spawn (lua_State *L) { return (lua_pushcfunction(L, spawn), 1); }
-int luaopen_os_spawn(lua_State *L) { return luaopen_spawn(L); }
+/** os.spawn() Lua function. */
+static int spawn(lua_State *L) {
+#if !_WIN32
+  char **argv = NULL;
+  GError *error = NULL;
+  if (!g_shell_parse_argv(luaL_checkstring(L, 1), NULL, &argv, &error)) {
+    lua_pushfstring(L, "invalid argv: %s", error->message);
+    luaL_argerror(L, 1, lua_tostring(L, -1));
+  }
+#else
+  lua_pushstring(L, getenv("COMSPEC"));
+  lua_pushstring(L, " /c ");
+  lua_pushvalue(L, 1);
+  lua_concat(L, 3);
+  lua_replace(L, 1); // cmd = os.getenv('COMSPEC')..' /c '..cmd
+  wchar_t argv[2048] = {L'\0'}, cwd[MAX_PATH] = {L'\0'};
+  MultiByteToWideChar(CP_UTF8, 0, lua_tostring(L, 1), -1, (LPWSTR)&argv,
+                      sizeof(argv));
+  MultiByteToWideChar(CP_UTF8, 0, lua_tostring(L, 2), -1, (LPWSTR)&cwd,
+                      MAX_PATH);
+#endif
+  lua_settop(L, 5); // ensure 5 values so userdata to be pushed is 6th
+
+  PStream *p = (PStream *)lua_newuserdata(L, sizeof(PStream));
+  p->L = L;
+  if (luaL_newmetatable(L, "ta_spawn")) {
+    l_setcfunction(L, -1, "status", lp_status);
+    l_setcfunction(L, -1, "wait", lp_wait);
+    l_setcfunction(L, -1, "write", lp_write);
+    l_setcfunction(L, -1, "kill", lp_kill);
+    l_setcfunction(L, -1, "__tostring", lp_tostring);
+    lua_pushvalue(L, -1), lua_setfield(L, -2, "__index");
+  }
+  lua_setmetatable(L, -2);
+
+#if !_WIN32
+  GSpawnFlags flags = G_SPAWN_DO_NOT_REAP_CHILD | G_SPAWN_SEARCH_PATH;
+  if (g_spawn_async_with_pipes(lua_tostring(L, 2), argv, NULL, flags, NULL,
+                               NULL, &p->pid, &p->stdin, &p->stdout, &p->stderr,
+                               &error)) {
+    p->_stdout = new_channel(p->stdout, p), p->stdout_cb = l_reffunction(L, 3);
+    p->_stderr = new_channel(p->stderr, p), p->stderr_cb = l_reffunction(L, 4);
+    p->exit_cb = l_reffunction(L, 5);
+    g_child_watch_add(p->pid, p_exit, p);
+    lua_pushnil(L);
+  } else {
+    lua_pushnil(L);
+    lua_pushfstring(L, "%s: %s", lua_tostring(L, 1), error->message);
+  }
+
+  g_strfreev(argv);
+#else
+  // Adapted from SciTE.
+  SECURITY_DESCRIPTOR sd;
+  InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
+  SetSecurityDescriptorDacl(&sd, TRUE, NULL, FALSE);
+  SECURITY_ATTRIBUTES sa = {sizeof(SECURITY_ATTRIBUTES), 0, 0};
+  sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+  sa.lpSecurityDescriptor = &sd;
+  sa.bInheritHandle = TRUE;
+
+  // Redirect stdin.
+  HANDLE stdin_read = NULL, proc_stdin = NULL;
+  CreatePipe(&stdin_read, &proc_stdin, &sa, 0);
+  SetHandleInformation(proc_stdin, HANDLE_FLAG_INHERIT, 0);
+  // Redirect stdout.
+  HANDLE proc_stdout = NULL, stdout_write = NULL;
+  CreatePipe(&proc_stdout, &stdout_write, &sa, 0);
+  SetHandleInformation(proc_stdout, HANDLE_FLAG_INHERIT, 0);
+  // Redirect stderr.
+  HANDLE proc_stderr = NULL, stderr_write = NULL;
+  CreatePipe(&proc_stderr, &stderr_write, &sa, 0);
+  SetHandleInformation(proc_stderr, HANDLE_FLAG_INHERIT, 0);
+
+  // Spawn with pipes and no window.
+  STARTUPINFOW startup_info = {
+    sizeof(STARTUPINFOW), NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, 0,
+    STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES, SW_HIDE, 0, 0, stdin_read,
+    stdout_write, stderr_write
+  };
+  PROCESS_INFORMATION proc_info = {0, 0, 0, 0};
+  if (CreateProcessW(NULL, argv, NULL, NULL, TRUE, CREATE_NEW_PROCESS_GROUP,
+                     NULL, *cwd ? cwd : NULL, &startup_info, &proc_info)) {
+    p->pid = proc_info.hProcess;
+    p->stdin = proc_stdin, p->stdout = proc_stdout, p->stderr = proc_stderr;
+    p->_stdout = new_channel(FD(proc_stdout), p);
+    p->stdout_cb = l_reffunction(L, 3);
+    p->_stderr = new_channel(FD(proc_stderr), p);
+    p->stderr_cb = l_reffunction(L, 4);
+    p->exit_cb = l_reffunction(L, 5);
+    g_child_watch_add(p->pid, p_exit, p);
+    // Close unneeded handles.
+    CloseHandle(proc_info.hThread);
+    CloseHandle(stdin_read);
+    CloseHandle(stdout_write), CloseHandle(stderr_write);
+    lua_pushnil(L);
+  } else {
+    char *message = NULL;
+    FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+                   FORMAT_MESSAGE_IGNORE_INSERTS, NULL, GetLastError(),
+                   MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&message,
+                   0, NULL);
+    lua_pushnil(L);
+    lua_pushfstring(L, "%s: %s", lua_tostring(L, 1), message);
+    LocalFree(message);
+  }
+#endif
+
+  return 2;
+}
+
+int luaopen_spawn(lua_State *L) { return (lua_pushcfunction(L, spawn), 1); }

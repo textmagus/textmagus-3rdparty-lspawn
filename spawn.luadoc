@@ -1,35 +1,29 @@
--- Copyright 2012-2013 Mitchell mitchell.att.foicica.com. See LICENSE.
--- This is a DUMMY FILE used for making LuaDoc for built-in functions in the
--- os table.
+-- Copyright 2012-2014 Mitchell mitchell.att.foicica.com. See LICENSE.
+-- This is a DUMMY FILE used for making LuaDoc for `spawn()`.
 
---- Extends Lua's `os` package to provide spawn functionality.
-module('os')
+module('_G')
 
 ---
--- Spawns an interactive child process in a separate thread using GTK.
+-- Spawns an interactive child process in a separate thread with the help of
+-- GLib.
+-- @param argv A UTF-8-encoded command line string containing the program's name
+--   followed by arguments to pass to it. `PATH` is searched for program names.
 -- @param working_dir The child's UTF-8 current working directory (cwd) or `nil`
---   to inherit Textadept's.
--- @param argv A string name of the program to execute or an `arg`-like table
---   containing the program's name followed by arguments to pass to it. Your
---   `PATH` is searched for program names. Arguments are automatically quoted
---   correctly. All strings must be encoded in UTF-8.
--- @param env A table containing `'KEY=VALUE'` strings of environment variables
---   for the child's environment or `nil` to inherit Textadept's. All strings
---   must be encoded in UTF-8.
--- @param stdin String standard input to initially pass to the child or `nil`.
--- @param stdout_cb A Lua function that accepts a string parameter for the
---   standard output from the child. Stdout is read asynchronously in 1KB blocks
---   or however much data is available at the time. It is encoded in `_CHARSET`.
--- @param stderr_cb A Lua function that accepts a string parameter for the
---   standard error from the child. Stderr is read asynchronously in 1KB blocks
---   or however much data is available at the time. It is encoded in `_CHARSET`.
+--   to inherit the parent's.
+-- @param stdout_cb A Lua function that accepts a string parameter for a block
+--   of standard output read from the child. Stdout is read asynchronously in
+--   1KB or 0.5KB blocks (depending on the platform), or however much data is
+--   available at the time. All text is encoded in `_CHARSET`.
+-- @param stderr_cb A Lua function that accepts a string parameter for a block
+--   of standard error read from the child. Stderr is read asynchronously in 1KB
+--   or 0.5kB blocks (depending on the platform), or however much data is
+--   available at the time. All text is encoded in `_CHARSET`.
 -- @param exit_cb A Lua function that is called when the child process finishes.
--- @return function that sends subsequent standard input strings to the child.
---   Passing `nil` kills the process prematurely. Trying to pass stdin to a dead
---   process will throw an error. You can check if a process `p` is dead using
---   `exit_cb` or testing if `debug.getupvalue(p, 1)` is `nil`.
--- @usage os.spawn(nil, { 'lua', buffer.filename }, nil, nil, print)
--- @usage p = os.spawn(nil, { 'lua', '-e', 'print(io.read())' }, nil, '', print)
---        p('foo\\n')
+--   The child's exit status is passed.
+-- @return proc
+-- @usage spawn('lua buffer.filename', nil, print)
+-- @usage proc = spawn('lua -e "print(io.read())", nil, print)
+--        proc:write('foo\\n')
 -- @see _G._CHARSET
-function spawn(working_dir, argv, env, stdin, stdout_cb, stderr_cb, exit_cb) end
+-- @see proc
+function spawn(argv, working_dir, stdout_cb, stderr_cb, exit_cb) end

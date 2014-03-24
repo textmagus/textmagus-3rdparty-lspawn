@@ -16,10 +16,10 @@ ifneq (, $(or $(findstring Linux, $(kernel)), $(findstring BSD, $(kernel))))
     prefix = $(ta_src)/$(MAKECMDGOALS)
     gtk_flags = $(shell PKG_CONFIG_PATH=$(prefix)gtk/lib/pkgconfig \
                         pkg-config --define-variable=prefix=$(prefix)gtk \
-                        --cflags gtk+-2.0)
+                        --cflags glib-2.0)
     gtk_libs = $(shell PKG_CONFIG_PATH=$(prefix)gtk/lib/pkgconfig \
                         pkg-config --define-variable=prefix=$(prefix)gtk \
-                        --libs gtk+-2.0)
+                        --libs glib-2.0)
     lua_libs = -L. -llua52
 
     target = spawn.dll
@@ -32,7 +32,7 @@ ifneq (, $(or $(findstring Linux, $(kernel)), $(findstring BSD, $(kernel))))
 
     gtk_flags = $(shell PKG_CONFIG_PATH=$(ta_src)/gtkosx/lib/pkgconfig \
                         pkg-config --define-variable=prefix=$(ta_src)/gtkosx \
-                        --cflags gtk+-2.0)
+                        --cflags glib-2.0)
 
     target = spawn.so
   else
@@ -44,7 +44,7 @@ ifneq (, $(or $(findstring Linux, $(kernel)), $(findstring BSD, $(kernel))))
     else
       gtk_version = 3.0
     endif
-    gtk_flags = $(shell pkg-config --cflags gtk+-$(gtk_version))
+    gtk_flags = $(shell pkg-config --cflags glib-2.0)
 
     target = spawn.so.$(shell uname -i)
   endif
@@ -67,7 +67,7 @@ clean:
 
 # Documentation.
 
-adeptsense: spawn.luadoc
+adeptsense: spawn.luadoc proc.luadoc
 	luadoc -d . --doclet adeptsensedoc $^
 
 # Package.
