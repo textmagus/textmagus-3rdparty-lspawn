@@ -60,8 +60,11 @@ static int lp_write(lua_State *L) {
   PStream *p = (PStream *)luaL_checkudata(L, 1, "ta_spawn");
   luaL_argcheck(L, p->pid, 1, "process terminated");
   size_t len;
-  const char *s = luaL_checklstring(L, 2, &len);
-  write(p->stdin, s, len);
+  int i;
+  for (i = 2; i <= lua_gettop(L); i++) {
+    const char *s = luaL_checklstring(L, i, &len);
+    write(p->stdin, s, len);
+  }
   return 0;
 }
 

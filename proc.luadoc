@@ -20,8 +20,8 @@ function wait(proc) end
 ---
 -- Writes string `input` to the stdin of `proc`.
 -- @param proc A process created by `spawn()`.
--- @param input Standard input for `proc`.
-function write(proc, input) end
+-- @param ... Standard input for `proc`.
+function write(proc, ...) end
 
 ---
 -- Kills running `proc`.
