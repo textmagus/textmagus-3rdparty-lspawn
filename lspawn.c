@@ -94,7 +94,7 @@ static int ch_read(GIOChannel *source, GIOCondition cond, void *data) {
   do {
     int status = g_io_channel_read_chars(source, buf, BUFSIZ, &len, NULL);
     int r = (source == p->_stdout) ? p->stdout_cb : p->stderr_cb;
-    if (status == G_IO_STATUS_NORMAL && len > 0 && r != LUA_REFNIL) {
+    if (status == G_IO_STATUS_NORMAL && len > 0 && r > 0) {
       lua_rawgeti(p->L, LUA_REGISTRYINDEX, r);
       lua_pushlstring(p->L, buf, len);
       lua_pcall(p->L, 1, 0, 0);
