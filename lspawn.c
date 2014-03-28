@@ -152,9 +152,9 @@ static int spawn(lua_State *L) {
   lua_concat(L, 3);
   lua_replace(L, 1); // cmd = os.getenv('COMSPEC')..' /c '..cmd
   wchar_t argv[2048] = {L'\0'}, cwd[MAX_PATH] = {L'\0'};
-  MultiByteToWideChar(CP_UTF8, 0, lua_tostring(L, 1), -1, (LPWSTR)&argv,
+  MultiByteToWideChar(GetACP(), 0, lua_tostring(L, 1), -1, (LPWSTR)&argv,
                       sizeof(argv));
-  MultiByteToWideChar(CP_UTF8, 0, lua_tostring(L, 2), -1, (LPWSTR)&cwd,
+  MultiByteToWideChar(GetACP(), 0, lua_tostring(L, 2), -1, (LPWSTR)&cwd,
                       MAX_PATH);
 #endif
   lua_settop(L, 5); // ensure 5 values so userdata to be pushed is 6th
