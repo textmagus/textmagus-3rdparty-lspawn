@@ -1,6 +1,5 @@
 // Copyright 2012-2014 Mitchell mitchell<att>foicica.com. See LICENSE.
 
-#define _STDSTREAM_DEFINED // Win32
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,11 +31,11 @@
 typedef struct {
   lua_State *L;
 #if !_WIN32
-  int pid, stdin, stdout, stderr;
+  int pid, fstdin, fstdout, fstderr;
 #else
-  HANDLE pid, stdin, stdout, stderr;
+  HANDLE pid, fstdin, fstdout, fstderr;
 #endif
-  GIOChannel *_stdout, *_stderr;
+  GIOChannel *cstdout, *cstderr;
   int stdout_cb, stderr_cb, exit_cb;
 } PStream;
 
@@ -63,7 +62,7 @@ static int lp_write(lua_State *L) {
   int i;
   for (i = 2; i <= lua_gettop(L); i++) {
     const char *s = luaL_checklstring(L, i, &len);
-    write(p->stdin, s, len);
+    write(p->fstdin, s, len);
   }
   return 0;
 }
@@ -93,7 +92,7 @@ static int ch_read(GIOChannel *source, GIOCondition cond, void *data) {
   size_t len = 0;
   do {
     int status = g_io_channel_read_chars(source, buf, BUFSIZ, &len, NULL);
-    int r = (source == p->_stdout) ? p->stdout_cb : p->stderr_cb;
+    int r = (source == p->cstdout) ? p->stdout_cb : p->stderr_cb;
     if (status == G_IO_STATUS_NORMAL && len > 0 && r > 0) {
       lua_rawgeti(p->L, LUA_REGISTRYINDEX, r);
       lua_pushlstring(p->L, buf, len);
@@ -129,14 +128,14 @@ static void p_exit(GPid pid, int status, void *data) {
 #if _WIN32
   close(p->pid);
 #endif
-  close(p->stdin), close(p->stdout), close(p->stderr);
+  close(p->fstdin), close(p->fstdout), close(p->fstderr);
   luaL_unref(p->L, LUA_REGISTRYINDEX, p->stdout_cb);
   luaL_unref(p->L, LUA_REGISTRYINDEX, p->stderr_cb);
   luaL_unref(p->L, LUA_REGISTRYINDEX, p->exit_cb);
   p->pid = 0;
 }
 
-/** os.spawn() Lua function. */
+/** spawn() Lua function. */
 static int spawn(lua_State *L) {
 #if !_WIN32
   char **argv = NULL;
@@ -174,10 +173,10 @@ static int spawn(lua_State *L) {
 #if !_WIN32
   GSpawnFlags flags = G_SPAWN_DO_NOT_REAP_CHILD | G_SPAWN_SEARCH_PATH;
   if (g_spawn_async_with_pipes(lua_tostring(L, 2), argv, NULL, flags, NULL,
-                               NULL, &p->pid, &p->stdin, &p->stdout, &p->stderr,
-                               &error)) {
-    p->_stdout = new_channel(p->stdout, p), p->stdout_cb = l_reffunction(L, 3);
-    p->_stderr = new_channel(p->stderr, p), p->stderr_cb = l_reffunction(L, 4);
+                               NULL, &p->pid, &p->fstdin, &p->fstdout,
+                               &p->fstderr, &error)) {
+    p->cstdout = new_channel(p->fstdout, p), p->stdout_cb = l_reffunction(L, 3);
+    p->cstderr = new_channel(p->fstderr, p), p->stderr_cb = l_reffunction(L, 4);
     p->exit_cb = l_reffunction(L, 5);
     g_child_watch_add(p->pid, p_exit, p);
     lua_pushnil(L);
@@ -220,10 +219,10 @@ static int spawn(lua_State *L) {
   if (CreateProcessW(NULL, argv, NULL, NULL, TRUE, CREATE_NEW_PROCESS_GROUP,
                      NULL, *cwd ? cwd : NULL, &startup_info, &proc_info)) {
     p->pid = proc_info.hProcess;
-    p->stdin = proc_stdin, p->stdout = proc_stdout, p->stderr = proc_stderr;
-    p->_stdout = new_channel(FD(proc_stdout), p);
+    p->fstdin = proc_stdin, p->fstdout = proc_stdout, p->fstderr = proc_stderr;
+    p->cstdout = new_channel(FD(proc_stdout), p);
     p->stdout_cb = l_reffunction(L, 3);
-    p->_stderr = new_channel(FD(proc_stderr), p);
+    p->cstderr = new_channel(FD(proc_stderr), p);
     p->stderr_cb = l_reffunction(L, 4);
     p->exit_cb = l_reffunction(L, 5);
     g_child_watch_add(p->pid, p_exit, p);
