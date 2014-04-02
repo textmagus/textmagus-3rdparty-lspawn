@@ -87,7 +87,7 @@ static int lp_tostring(lua_State *L) {
 /** Signal that channel output is available for reading. */
 static int ch_read(GIOChannel *source, GIOCondition cond, void *data) {
   PStream *p = (PStream *)data;
-  if (!(cond & G_IO_IN)) return FALSE;
+  if (!p->pid || !(cond & G_IO_IN)) return FALSE;
   char buf[BUFSIZ];
   size_t len = 0;
   do {
@@ -99,7 +99,7 @@ static int ch_read(GIOChannel *source, GIOCondition cond, void *data) {
       lua_pcall(p->L, 1, 0, 0);
     }
   } while (len == BUFSIZ);
-  return !(cond & G_IO_HUP);
+  return p->pid && !(cond & G_IO_HUP);
 }
 
 /**
