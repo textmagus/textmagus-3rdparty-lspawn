@@ -246,4 +246,9 @@ static int spawn(lua_State *L) {
   return 2;
 }
 
-int luaopen_spawn(lua_State *L) { return (lua_pushcfunction(L, spawn), 1); }
+int luaopen_spawn(lua_State *L) {
+#if LUA_VERSION_NUM < 502
+  lua_register(L, "spawn", spawn);
+#endif
+  return (lua_pushcfunction(L, spawn), 1);
+}
