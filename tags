@@ -2,6 +2,7 @@ _G	_	0;"	m
 kill	_	0;"	f	class:proc
 proc	_	0;"	m	
 proc	_	0;"	t	
+read	_	0;"	f	class:proc
 spawn	_	0;"	f	
 status	_	0;"	f	class:proc
 wait	_	0;"	f	class:proc

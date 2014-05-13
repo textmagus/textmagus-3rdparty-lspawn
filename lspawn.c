@@ -11,7 +11,7 @@
 #include <fcntl.h>
 #define waitpid(pid, ...) WaitForSingleObject(pid, INFINITE)
 #define write(fd, s, len) WriteFile(fd, s, len, NULL, NULL)
-#define kill(pid, _) TerminateProcess(pid, 0)
+#define kill(pid, _) TerminateProcess(pid, 1)
 #define g_io_channel_unix_new g_io_channel_win32_new_fd
 #define close CloseHandle
 #define FD(handle) _open_osfhandle((intptr_t)handle, _O_RDONLY)
@@ -54,6 +54,45 @@ static int lp_wait(lua_State *L) {
   return 0;
 }
 
+/** p:read() Lua function. */
+static int lp_read(lua_State *L) {
+  PStream *p = (PStream *)luaL_checkudata(L, 1, "ta_spawn");
+  luaL_argcheck(L, p->pid, 1, "process terminated");
+  const char *arg = luaL_optstring(L, 2, "*l"), c = *(arg + 1);
+  luaL_argcheck(L, arg[0] == '*' && (c == 'l' || c == 'L' || c == 'a') ||
+                   lua_isnumber(L, 2), 2, "invalid option");
+  char *buf;
+  size_t len;
+  GError *error = NULL;
+  GIOStatus status;
+  if (!g_io_channel_get_buffered(p->cstdout))
+    g_io_channel_set_buffered(p->cstdout, TRUE); // needed for functions below
+  if (!lua_isnumber(L, 2)) {
+    if (c == 'l' || c == 'L') {
+      GString *s = g_string_new(NULL);
+      status = g_io_channel_read_line_string(p->cstdout, s, NULL, &error);
+      len = s->len, buf = g_string_free(s, FALSE);
+    } else if (c == 'a') {
+      status = g_io_channel_read_to_end(p->cstdout, &buf, &len, &error);
+      if (status == G_IO_STATUS_EOF) status = G_IO_STATUS_NORMAL;
+    }
+  } else {
+    size_t bytes = (size_t)lua_tointeger(L, 2);
+    buf = malloc(bytes);
+    status = g_io_channel_read_chars(p->cstdout, buf, bytes, &len, &error);
+  }
+  if ((g_io_channel_get_buffer_condition(p->cstdout) & G_IO_IN) == 0)
+    g_io_channel_set_buffered(p->cstdout, FALSE); // needed for stdout callback
+  lua_pushlstring(L, buf, len - ((buf[len - 1] == '\n' && c == 'l') ? 1 : 0));
+  free(buf);
+  if (status != G_IO_STATUS_NORMAL) {
+    lua_pushnil(L);
+    if (status == G_IO_STATUS_EOF) return 1;
+    lua_pushinteger(L, error->code), lua_pushstring(L, error->message);
+    return 3;
+  } else return 1;
+}
+
 /** p:write() Lua function. */
 static int lp_write(lua_State *L) {
   PStream *p = (PStream *)luaL_checkudata(L, 1, "ta_spawn");
@@ -70,7 +109,7 @@ static int lp_write(lua_State *L) {
 /** p:kill() Lua function. */
 static int lp_kill(lua_State *L) {
   PStream *p = (PStream *)luaL_checkudata(L, 1, "ta_spawn");
-  if (p->pid) kill(p->pid, SIGKILL), p->pid = 0;
+  if (p->pid) kill(p->pid, SIGKILL);
   return 0;
 }
 
@@ -107,13 +146,16 @@ static int ch_read(GIOChannel *source, GIOCondition cond, void *data) {
  * @param fd File descriptor returned by `g_spawn_async_with_pipes()` or
  *   `_open_osfhandle()`.
  * @param p PStream to notify when output is available for reading.
+ * @param watch Whether or not to watch for output to send to a Lua callback.
  */
-static GIOChannel *new_channel(int fd, PStream *p) {
+static GIOChannel *new_channel(int fd, PStream *p, int watch) {
   GIOChannel *channel = g_io_channel_unix_new(fd);
   g_io_channel_set_encoding(channel, NULL, NULL);
   g_io_channel_set_buffered(channel, FALSE);
-  g_io_add_watch(channel, G_IO_IN | G_IO_HUP, ch_read, p);
-  g_io_channel_unref(channel);
+  if (watch) {
+    g_io_add_watch(channel, G_IO_IN | G_IO_HUP, ch_read, p);
+    g_io_channel_unref(channel);
+  }
   return channel;
 }
 
@@ -160,9 +202,12 @@ static int spawn(lua_State *L) {
 
   PStream *p = (PStream *)lua_newuserdata(L, sizeof(PStream));
   p->L = L;
+  p->stdout_cb = l_reffunction(L, 3), p->stderr_cb = l_reffunction(L, 4);
+  p->exit_cb = l_reffunction(L, 5);
   if (luaL_newmetatable(L, "ta_spawn")) {
     l_setcfunction(L, -1, "status", lp_status);
     l_setcfunction(L, -1, "wait", lp_wait);
+    l_setcfunction(L, -1, "read", lp_read);
     l_setcfunction(L, -1, "write", lp_write);
     l_setcfunction(L, -1, "kill", lp_kill);
     l_setcfunction(L, -1, "__tostring", lp_tostring);
@@ -175,9 +220,8 @@ static int spawn(lua_State *L) {
   if (g_spawn_async_with_pipes(lua_tostring(L, 2), argv, NULL, flags, NULL,
                                NULL, &p->pid, &p->fstdin, &p->fstdout,
                                &p->fstderr, &error)) {
-    p->cstdout = new_channel(p->fstdout, p), p->stdout_cb = l_reffunction(L, 3);
-    p->cstderr = new_channel(p->fstderr, p), p->stderr_cb = l_reffunction(L, 4);
-    p->exit_cb = l_reffunction(L, 5);
+    p->cstdout = new_channel(p->fstdout, p, p->stdout_cb > 0);
+    p->cstderr = new_channel(p->fstderr, p, p->stderr_cb > 0);
     g_child_watch_add(p->pid, p_exit, p);
     lua_pushnil(L);
   } else {
@@ -220,11 +264,8 @@ static int spawn(lua_State *L) {
                      NULL, *cwd ? cwd : NULL, &startup_info, &proc_info)) {
     p->pid = proc_info.hProcess;
     p->fstdin = proc_stdin, p->fstdout = proc_stdout, p->fstderr = proc_stderr;
-    p->cstdout = new_channel(FD(proc_stdout), p);
-    p->stdout_cb = l_reffunction(L, 3);
-    p->cstderr = new_channel(FD(proc_stderr), p);
-    p->stderr_cb = l_reffunction(L, 4);
-    p->exit_cb = l_reffunction(L, 5);
+    p->cstdout = new_channel(FD(proc_stdout), p, p->stdout_cb > 0);
+    p->cstderr = new_channel(FD(proc_stderr), p, p->stderr_cb > 0);
     g_child_watch_add(p->pid, p_exit, p);
     // Close unneeded handles.
     CloseHandle(proc_info.hThread);
