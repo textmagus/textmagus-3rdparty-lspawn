@@ -29,6 +29,7 @@
 
 typedef struct {
   lua_State *L;
+  int ref;
 #if !_WIN32
   int pid, fstdin, fstdout, fstderr;
 #else
@@ -178,6 +179,7 @@ static void p_exit(GPid pid, int status, void *data) {
   luaL_unref(p->L, LUA_REGISTRYINDEX, p->stdout_cb);
   luaL_unref(p->L, LUA_REGISTRYINDEX, p->stderr_cb);
   luaL_unref(p->L, LUA_REGISTRYINDEX, p->exit_cb);
+  luaL_unref(p->L, LUA_REGISTRYINDEX, p->ref); // allow proc to be collected
   p->pid = 0;
 }
 
@@ -205,7 +207,7 @@ static int spawn(lua_State *L) {
   lua_settop(L, 5); // ensure 5 values so userdata to be pushed is 6th
 
   PStream *p = (PStream *)lua_newuserdata(L, sizeof(PStream));
-  p->L = L;
+  p->L = L, p->ref = 0;
   p->stdout_cb = l_reffunction(L, 3), p->stderr_cb = l_reffunction(L, 4);
   p->exit_cb = l_reffunction(L, 5);
   if (luaL_newmetatable(L, "ta_spawn")) {
@@ -287,6 +289,8 @@ static int spawn(lua_State *L) {
     LocalFree(message);
   }
 #endif
+  if (lua_isuserdata(L, -2))
+    p->ref = (lua_pushvalue(L, -2), luaL_ref(L, LUA_REGISTRYINDEX));
 
   return 2;
 }
