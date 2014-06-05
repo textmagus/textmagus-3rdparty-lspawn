@@ -10,7 +10,6 @@
 #include <windows.h>
 #include <fcntl.h>
 #define waitpid(pid, ...) WaitForSingleObject(pid, INFINITE)
-#define write(fd, s, len) WriteFile(fd, s, len, NULL, NULL)
 #define kill(pid, _) TerminateProcess(pid, 1)
 #define g_io_channel_unix_new g_io_channel_win32_new_fd
 #define close CloseHandle
@@ -101,7 +100,12 @@ static int lp_write(lua_State *L) {
   int i;
   for (i = 2; i <= lua_gettop(L); i++) {
     const char *s = luaL_checklstring(L, i, &len);
+#if !_WIN32
     write(p->fstdin, s, len);
+#else
+    DWORD len_written;
+    WriteFile(p->fstdin, s, len, &len_written, NULL);
+#endif
   }
   return 0;
 }
