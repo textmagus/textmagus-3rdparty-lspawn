@@ -4,28 +4,43 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
+#if GTK
 #include <glib.h>
+#elif (!_WIN32)
+#include <errno.h>
+#include <sys/select.h>
+#include <sys/wait.h>
+#endif
 #if _WIN32
-#include <windows.h>
 #include <fcntl.h>
+#include <windows.h>
+#endif
+
+#include <lua.h>
+#include <lualib.h>
+#include <lauxlib.h>
+
+#if _WIN32
 #define waitpid(pid, ...) WaitForSingleObject(pid, INFINITE)
 #define kill(pid, _) TerminateProcess(pid, 1)
 #define g_io_channel_unix_new g_io_channel_win32_new_fd
 #define close CloseHandle
 #define FD(handle) _open_osfhandle((intptr_t)handle, _O_RDONLY)
+#if !GTK
+// The following macro is only for quieting compiler warnings. Spawning in Win32
+// console is not supported.
+#define read(fd, buf, len) read((int)fd, buf, len)
 #endif
-
-#include "lua.h"
-#include "lualib.h"
-#include "lauxlib.h"
-
+#endif
 #define l_setcfunction(l, n, name, f) \
   (lua_pushcfunction(l, f), lua_setfield(l, (n > 0) ? n : n - 1, name))
 #define l_reffunction(l, n) \
   (luaL_argcheck(l, lua_isfunction(l, n) || lua_isnoneornil(l, n), n, \
                  "function or nil expected"), \
    lua_pushvalue(l, n), luaL_ref(l, LUA_REGISTRYINDEX))
+#if LUA_VERSION_NUM < 502
+#define lua_rawlen lua_objlen
+#endif
 
 typedef struct {
   lua_State *L;
@@ -35,7 +50,9 @@ typedef struct {
 #else
   HANDLE pid, fstdin, fstdout, fstderr;
 #endif
+#if GTK
   GIOChannel *cstdout, *cstderr;
+#endif
   int stdout_cb, stderr_cb, exit_cb;
 } PStream;
 
@@ -61,6 +78,7 @@ static int lp_read(lua_State *L) {
   const char *arg = luaL_optstring(L, 2, "*l"), c = *(arg + 1);
   luaL_argcheck(L, arg[0] == '*' && (c == 'l' || c == 'L' || c == 'a') ||
                    lua_isnumber(L, 2), 2, "invalid option");
+#if GTK
   char *buf;
   size_t len;
   GError *error = NULL;
@@ -91,6 +109,31 @@ static int lp_read(lua_State *L) {
     lua_pushinteger(L, error->code), lua_pushstring(L, error->message);
     return 3;
   } else return 1;
+#else
+  int len = 0, n = 0;
+  if (!lua_isnumber(L, 2)) {
+    luaL_Buffer buf;
+    luaL_buffinit(L, &buf);
+    char c;
+    while ((n = read(p->fstdout, &c, 1)) > 0) {
+      if (c != '\n' || c == 'L') luaL_addchar(&buf, c), len++;
+      if (c == '\n' && c != 'a') break;
+    }
+    if (n < 0 && len == 0) len = n;
+    luaL_pushresult(&buf);
+  } else {
+    size_t bytes = (size_t)lua_tointeger(L, 2);
+    char *buf = malloc(bytes);
+    if ((len = read(p->fstdout, buf, bytes)) > 0) lua_pushlstring(L, buf, len);
+    free(buf);
+  }
+  if (len <= 0) {
+    lua_pushnil(L);
+    if (len == 0) return 1;
+    lua_pushinteger(L, errno), lua_pushstring(L, strerror(errno));
+    return 3;
+  } else return 1;
+#endif
 }
 
 /** p:write() Lua function. */
@@ -128,6 +171,7 @@ static int lp_tostring(lua_State *L) {
   return 1;
 }
 
+#if GTK
 /** Signal that channel output is available for reading. */
 static int ch_read(GIOChannel *source, GIOCondition cond, void *data) {
   PStream *p = (PStream *)data;
@@ -182,16 +226,121 @@ static void p_exit(GPid pid, int status, void *data) {
   luaL_unref(p->L, LUA_REGISTRYINDEX, p->ref); // allow proc to be collected
   p->pid = 0;
 }
+#elif !_WIN32
+/**
+ * Pushes onto the stack an fd_set of all spawned processes for use with
+ * `select()` and `lspawn_readfds()` and returns the `nfds` to pass to
+ * `select()`.
+ */
+int lspawn_pushfds(lua_State *L) {
+  int nfds = 1;
+  fd_set *fds = (fd_set *)lua_newuserdata(L, sizeof(fd_set));
+  FD_ZERO(fds);
+  lua_getfield(L, LUA_REGISTRYINDEX, "spawn_procs");
+  lua_pushnil(L);
+  while (lua_next(L, -2)) {
+    PStream *p = (PStream *)lua_touserdata(L, -2);
+    FD_SET(p->fstdout, fds);
+    FD_SET(p->fstderr, fds);
+    if (p->fstdout >= nfds) nfds = p->fstdout + 1;
+    if (p->fstderr >= nfds) nfds = p->fstderr + 1;
+    lua_pop(L, 1); // value
+  }
+  lua_pop(L, 1); // spawn_procs
+  return nfds;
+}
+
+/** Signal that a fd has output to read. */
+static void fd_read(int fd, PStream *p) {
+  char buf[BUFSIZ];
+  ssize_t len;
+  do {
+    len = read(fd, buf, BUFSIZ);
+    int r = (fd == p->fstdout) ? p->stdout_cb : p->stderr_cb;
+    if (len > 0 && r > 0) {
+      lua_rawgeti(p->L, LUA_REGISTRYINDEX, r);
+      lua_pushlstring(p->L, buf, len);
+      lua_pcall(p->L, 1, 0, 0);
+    }
+  } while (len == BUFSIZ);
+}
+
+/**
+ * Reads any output from the fds in the fd_set at the top of the stack and
+ * returns the number of fds read from.
+ * Also signals any registered child processes that have finished and cleans up
+ * after them.
+ */
+int lspawn_readfds(lua_State *L) {
+  int n = 0;
+  fd_set *fds = (fd_set *)lua_touserdata(L, -1);
+  lua_getfield(L, LUA_REGISTRYINDEX, "spawn_procs");
+  lua_pushnil(L);
+  while (lua_next(L, -2)) {
+    PStream *p = (PStream *)lua_touserdata(L, -2);
+    // Read output if any is available.
+    if (FD_ISSET(p->fstdout, fds)) fd_read(p->fstdout, p), n++;
+    if (FD_ISSET(p->fstderr, fds)) fd_read(p->fstderr, p), n++;
+    // Check process status.
+    int status;
+    if (waitpid(p->pid, &status, WNOHANG) > 0) {
+      fd_read(p->fstdout, p), fd_read(p->fstderr, p); // read anything left
+      if (p->exit_cb != LUA_REFNIL) {
+        lua_rawgeti(L, LUA_REGISTRYINDEX, p->exit_cb);
+        lua_pushinteger(L, status);
+        lua_pcall(L, 1, 0, 0);
+      }
+      close(p->fstdin), close(p->fstdout), close(p->fstderr);
+      luaL_unref(L, LUA_REGISTRYINDEX, p->stdout_cb);
+      luaL_unref(L, LUA_REGISTRYINDEX, p->stderr_cb);
+      luaL_unref(L, LUA_REGISTRYINDEX, p->exit_cb);
+      p->pid = 0;
+      lua_pushnil(L), lua_replace(L, -2), lua_settable(L, -3); // t[proc] = nil
+      lua_pushnil(L); // push nil for next call to lua_next()
+    } else lua_pop(L, 1); // value
+  }
+  lua_pop(L, 1); // spawn_procs
+  return n;
+}
+#endif
 
 /** spawn() Lua function. */
 static int spawn(lua_State *L) {
 #if !_WIN32
+#if GTK
   char **argv = NULL;
   GError *error = NULL;
   if (!g_shell_parse_argv(luaL_checkstring(L, 1), NULL, &argv, &error)) {
     lua_pushfstring(L, "invalid argv: %s", error->message);
     luaL_argerror(L, 1, lua_tostring(L, -1));
   }
+#else
+  lua_newtable(L);
+  const char *param = luaL_checkstring(L, 1), *c = param;
+  while (*c) {
+    while (*c == ' ') c++;
+    param = c;
+    if (*c == '"') {
+      param = ++c;
+      while (*c && *c != '"') c++;
+    } else while (*c && *c != ' ') c++;
+    lua_pushlstring(L, param, c - param);
+    lua_rawseti(L, -2, lua_rawlen(L, -2) + 1);
+    if (*c == '"') c++;
+  }
+  int argc = lua_rawlen(L, -1), i;
+  char **argv = malloc((argc + 1) * sizeof(char *));
+  for (i = 0; i < argc; i++) {
+    lua_rawgeti(L, -1, i + 1);
+    size_t len = lua_rawlen(L, -1);
+    char *param = malloc(len + 1);
+    strcpy(param, lua_tostring(L, -1)), param[len] = '\0';
+    argv[i] = param;
+    lua_pop(L, 1); // param
+  }
+  argv[argc] = NULL;
+  lua_pop(L, 1); // argv
+#endif
 #else
   lua_pushstring(L, getenv("COMSPEC"));
   lua_pushstring(L, " /c ");
@@ -222,6 +371,7 @@ static int spawn(lua_State *L) {
   lua_setmetatable(L, -2);
 
 #if !_WIN32
+#if GTK
   GSpawnFlags flags = G_SPAWN_DO_NOT_REAP_CHILD | G_SPAWN_SEARCH_PATH;
   if (g_spawn_async_with_pipes(lua_tostring(L, 2), argv, NULL, flags, NULL,
                                NULL, &p->pid, &p->fstdin, &p->fstdout,
@@ -237,6 +387,49 @@ static int spawn(lua_State *L) {
 
   g_strfreev(argv);
 #else
+  // Adapted from Chris Emerson and GLib.
+  // Attempt to create pipes for stdin, stdout, and stderr and fork process.
+  int pstdin[2] = {-1, -1}, pstdout[2] = {-1, -1}, pstderr[2] = {-1, -1}, pid;
+  if (pipe(pstdin) == 0 && pipe(pstdout) == 0 && pipe(pstderr) == 0 &&
+      (pid = fork()) >= 0) {
+    if (pid > 0) {
+      // Parent process: register child for monitoring its fds and pid.
+      close(pstdin[0]), close(pstdout[1]), close(pstderr[1]);
+      p->pid = pid;
+      p->fstdin = pstdin[1], p->fstdout = pstdout[0], p->fstderr = pstderr[0];
+      lua_getfield(L, LUA_REGISTRYINDEX, "spawn_procs");
+      // spawn_procs is of the form: t[proc] = true
+      lua_pushvalue(L, -2), lua_pushboolean(L, 1), lua_settable(L, -3);
+      lua_pop(L, 1); // spawn_procs
+      lua_pushnil(L);
+    } else if (pid == 0) {
+      // Child process: redirect stdin, stdout, and stderr, chdir, and exec.
+      close(pstdin[1]), close(pstdout[0]), close(pstderr[0]);
+      close(0), close(1), close(2);
+      dup2(pstdin[0], 0), dup2(pstdout[1], 1), dup2(pstderr[1], 2);
+      close(pstdin[0]), close(pstdout[1]), close(pstderr[1]);
+      const char *cwd = lua_tostring(L, 2);
+      if (cwd && chdir(cwd) < 0) {
+        fprintf(stderr, "Failed to change directory '%s' (%s)", cwd,
+                strerror(errno));
+        exit(EXIT_FAILURE);
+      }
+      execvp(argv[0], argv); // does not return on success
+      fprintf(stderr, "Failed to execute child process \"%s\" (%s)", argv[0],
+              strerror(errno));
+    }
+  } else {
+    if (pstdin[0] >= 0) close(pstdin[0]), close(pstdin[1]);
+    if (pstdout[0] >= 0) close(pstdout[0]), close(pstdout[1]);
+    if (pstderr[0] >= 0) close(pstderr[0]), close(pstderr[1]);
+    lua_pushnil(L);
+    lua_pushfstring(L, "%s: %s", lua_tostring(L, 1), strerror(errno));
+  }
+  for (i = 0; i < argc; i++) free(argv[i]);
+  free(argv);
+#endif
+#else
+#if GTK
   // Adapted from SciTE.
   SECURITY_DESCRIPTOR sd;
   InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
@@ -288,6 +481,9 @@ static int spawn(lua_State *L) {
     lua_pushfstring(L, "%s: %s", lua_tostring(L, 1), message);
     LocalFree(message);
   }
+#else
+  luaL_error(L, "not implemented in this environment");
+#endif
 #endif
   if (lua_isuserdata(L, -2))
     p->ref = (lua_pushvalue(L, -2), luaL_ref(L, LUA_REGISTRYINDEX));
@@ -298,6 +494,10 @@ static int spawn(lua_State *L) {
 int luaopen_spawn(lua_State *L) {
 #if LUA_VERSION_NUM < 502
   lua_register(L, "spawn", spawn);
+#endif
+#if !GTK
+  // Need to keep track of running processes for monitoring fds and pids.
+  lua_newtable(L), lua_setfield(L, LUA_REGISTRYINDEX, "spawn_procs");
 #endif
   return (lua_pushcfunction(L, spawn), 1);
 }
