@@ -39,6 +39,7 @@
                  "function or nil expected"), \
    lua_pushvalue(l, n), luaL_ref(l, LUA_REGISTRYINDEX))
 #if LUA_VERSION_NUM < 502
+#define LUA_OK 0
 #define lua_rawlen lua_objlen
 #endif
 
@@ -184,7 +185,8 @@ static int ch_read(GIOChannel *source, GIOCondition cond, void *data) {
     if (status == G_IO_STATUS_NORMAL && len > 0 && r > 0) {
       lua_rawgeti(p->L, LUA_REGISTRYINDEX, r);
       lua_pushlstring(p->L, buf, len);
-      lua_pcall(p->L, 1, 0, 0);
+      if (lua_pcall(p->L, 1, 0, 0) != LUA_OK)
+        fprintf(stderr, "Lua: %s\n", lua_tostring(p->L, -1)), lua_pop(p->L, 1);
     }
   } while (len == BUFSIZ);
   return p->pid && !(cond & G_IO_HUP);
@@ -214,7 +216,8 @@ static void p_exit(GPid pid, int status, void *data) {
   if (p->exit_cb != LUA_REFNIL) {
     lua_rawgeti(p->L, LUA_REGISTRYINDEX, p->exit_cb);
     lua_pushinteger(p->L, status);
-    lua_pcall(p->L, 1, 0, 0);
+    if (lua_pcall(p->L, 1, 0, 0) != LUA_OK)
+      fprintf(stderr, "Lua: %s\n", lua_tostring(p->L, -1)), lua_pop(p->L, 1);
   }
 #if _WIN32
   close(p->pid);
@@ -260,7 +263,8 @@ static void fd_read(int fd, PStream *p) {
     if (len > 0 && r > 0) {
       lua_rawgeti(p->L, LUA_REGISTRYINDEX, r);
       lua_pushlstring(p->L, buf, len);
-      lua_pcall(p->L, 1, 0, 0);
+      if (lua_pcall(p->L, 1, 0, 0) != LUA_OK)
+        fprintf(stderr, "Lua: %s\n", lua_tostring(p->L, -1)), lua_pop(p->L, 1);
     }
   } while (len == BUFSIZ);
 }
@@ -288,7 +292,8 @@ int lspawn_readfds(lua_State *L) {
       if (p->exit_cb != LUA_REFNIL) {
         lua_rawgeti(L, LUA_REGISTRYINDEX, p->exit_cb);
         lua_pushinteger(L, status);
-        lua_pcall(L, 1, 0, 0);
+        if (lua_pcall(L, 1, 0, 0) != LUA_OK)
+          fprintf(stderr, "Lua: %s\n", lua_tostring(L, -1)), lua_pop(L, 1);
       }
       close(p->fstdin), close(p->fstdout), close(p->fstderr);
       luaL_unref(L, LUA_REGISTRYINDEX, p->stdout_cb);
