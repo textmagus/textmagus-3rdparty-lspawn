@@ -6,7 +6,7 @@
 #include <unistd.h>
 #if GTK
 #include <glib.h>
-#elif (!_WIN32)
+#elif !_WIN32
 #include <errno.h>
 #include <sys/select.h>
 #include <sys/wait.h>
@@ -115,10 +115,10 @@ static int lp_read(lua_State *L) {
   if (!lua_isnumber(L, 2)) {
     luaL_Buffer buf;
     luaL_buffinit(L, &buf);
-    char c;
-    while ((n = read(p->fstdout, &c, 1)) > 0) {
-      if (c != '\n' || c == 'L') luaL_addchar(&buf, c), len++;
-      if (c == '\n' && c != 'a') break;
+    char ch;
+    while ((n = read(p->fstdout, &ch, 1)) > 0) {
+      if (ch != '\n' || c == 'L' || c == 'a') luaL_addchar(&buf, ch), len++;
+      if (ch == '\n' && c != 'a') break;
     }
     if (n < 0 && len == 0) len = n;
     luaL_pushresult(&buf);
