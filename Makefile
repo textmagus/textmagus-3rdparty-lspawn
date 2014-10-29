@@ -1,7 +1,7 @@
 # Copyright 2012-2014 Mitchell mitchell.att.foicica.com. See LICENSE.
 
 CC = gcc
-CFLAGS = -fpic
+CFLAGS = -fpic -Wall -Wno-unused-variable
 ifdef GLIB
   plat_flags = -DGTK $(shell pkg-config --cflags glib-2.0)
   plat_libs = $(shell pkg-config --libs glib-2.0)

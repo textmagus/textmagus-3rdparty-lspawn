@@ -7,12 +7,13 @@
 #if GTK
 #include <glib.h>
 #endif
-#if ((!GTK && !_WIN32) || __APPLE__)
+#if !_WIN32
+#if (!GTK || __APPLE__)
 #include <errno.h>
 #include <sys/select.h>
-#include <sys/wait.h>
 #endif
-#if _WIN32
+#include <sys/wait.h>
+#else
 #include <fcntl.h>
 #include <windows.h>
 #endif
@@ -78,7 +79,7 @@ static int lp_read(lua_State *L) {
   PStream *p = (PStream *)luaL_checkudata(L, 1, "ta_spawn");
   luaL_argcheck(L, p->pid, 1, "process terminated");
   const char *arg = luaL_optstring(L, 2, "*l"), c = *(arg + 1);
-  luaL_argcheck(L, arg[0] == '*' && (c == 'l' || c == 'L' || c == 'a') ||
+  luaL_argcheck(L, (arg[0] == '*' && (c == 'l' || c == 'L' || c == 'a')) ||
                    lua_isnumber(L, 2), 2, "invalid option");
 #if (GTK && !__APPLE__)
   char *buf;
@@ -147,7 +148,7 @@ static int lp_write(lua_State *L) {
   for (i = 2; i <= lua_gettop(L); i++) {
     const char *s = luaL_checklstring(L, i, &len);
 #if !_WIN32
-    write(p->fstdin, s, len);
+    ssize_t len_written = write(p->fstdin, s, len);
 #else
     DWORD len_written;
     WriteFile(p->fstdin, s, len, &len_written, NULL);
