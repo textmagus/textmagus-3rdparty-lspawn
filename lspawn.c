@@ -13,6 +13,7 @@
 #include <sys/select.h>
 #endif
 #include <sys/wait.h>
+#include <signal.h>
 #else
 #include <fcntl.h>
 #include <windows.h>
@@ -143,12 +144,11 @@ static int lp_read(lua_State *L) {
 static int lp_write(lua_State *L) {
   PStream *p = (PStream *)luaL_checkudata(L, 1, "ta_spawn");
   luaL_argcheck(L, p->pid, 1, "process terminated");
-  size_t len;
-  int i;
-  for (i = 2; i <= lua_gettop(L); i++) {
+  for (int i = 2; i <= lua_gettop(L); i++) {
+    size_t len;
     const char *s = luaL_checklstring(L, i, &len);
 #if !_WIN32
-    ssize_t len_written = write(p->fstdin, s, len);
+    len = write(p->fstdin, s, len); // assign result to fix compiler warning
 #else
     DWORD len_written;
     WriteFile(p->fstdin, s, len, &len_written, NULL);
@@ -354,9 +354,9 @@ static int spawn(lua_State *L) {
     lua_rawseti(L, -2, lua_rawlen(L, -2) + 1);
     if (*c == '"') c++;
   }
-  int argc = lua_rawlen(L, -1), i;
+  int argc = lua_rawlen(L, -1);
   char **argv = malloc((argc + 1) * sizeof(char *));
-  for (i = 0; i < argc; i++) {
+  for (int i = 0; i < argc; i++) {
     lua_rawgeti(L, -1, i + 1);
     size_t len = lua_rawlen(L, -1);
     char *param = malloc(len + 1);
@@ -456,7 +456,7 @@ static int spawn(lua_State *L) {
     lua_pushnil(L);
     lua_pushfstring(L, "%s: %s", lua_tostring(L, 1), strerror(errno));
   }
-  for (i = 0; i < argc; i++) free(argv[i]);
+  for (int i = 0; i < argc; i++) free(argv[i]);
   free(argv);
 #endif
 #else
