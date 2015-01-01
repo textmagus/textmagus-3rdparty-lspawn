@@ -1,4 +1,4 @@
-# Copyright 2012-2014 Mitchell mitchell.att.foicica.com. See LICENSE.
+# Copyright 2012-2015 Mitchell mitchell.att.foicica.com. See LICENSE.
 
 CC = gcc
 lspawn_flags = -std=c99 -pedantic -fpic -D_XOPEN_SOURCE -Wall
