@@ -38,6 +38,12 @@ function read(proc, arg) end
 function write(proc, ...) end
 
 ---
+-- Closes standard input for process *proc*, effectively sending an EOF (end of
+-- file) to it.
+-- @param proc A process created by `spawn()`.
+function close(proc) end
+
+---
 -- Kills running process *proc*.
 -- @param proc A running process created by `spawn()`.
 function kill(proc) end

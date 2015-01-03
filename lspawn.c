@@ -157,6 +157,13 @@ static int lp_write(lua_State *L) {
   return 0;
 }
 
+/** p:close() Lua function. */
+static int lp_close(lua_State *L) {
+  PStream *p = (PStream *)luaL_checkudata(L, 1, "ta_spawn");
+  luaL_argcheck(L, p->pid, 1, "process terminated");
+  return (close(p->fstdin), 0);
+}
+
 /** p:kill() Lua function. */
 static int lp_kill(lua_State *L) {
   PStream *p = (PStream *)luaL_checkudata(L, 1, "ta_spawn");
@@ -390,6 +397,7 @@ static int spawn(lua_State *L) {
     l_setcfunction(L, -1, "wait", lp_wait);
     l_setcfunction(L, -1, "read", lp_read);
     l_setcfunction(L, -1, "write", lp_write);
+    l_setcfunction(L, -1, "close", lp_close);
     l_setcfunction(L, -1, "kill", lp_kill);
     l_setcfunction(L, -1, "__tostring", lp_tostring);
     lua_pushvalue(L, -1), lua_setfield(L, -2, "__index");
