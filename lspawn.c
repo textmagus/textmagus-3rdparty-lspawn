@@ -79,9 +79,10 @@ static int lp_wait(lua_State *L) {
 static int lp_read(lua_State *L) {
   PStream *p = (PStream *)luaL_checkudata(L, 1, "ta_spawn");
   luaL_argcheck(L, p->pid, 1, "process terminated");
-  const char *arg = luaL_optstring(L, 2, "*l"), c = *(arg + 1);
-  luaL_argcheck(L, (arg[0] == '*' && (c == 'l' || c == 'L' || c == 'a')) ||
-                   lua_isnumber(L, 2), 2, "invalid option");
+  char *c = (char *)luaL_optstring(L, 2, "l");
+  if (*c == '*') c++; // skip optional '*' (for compatibility)
+  luaL_argcheck(L, *c == 'l' || *c == 'L' || *c == 'a' || lua_isnumber(L, 2), 2,
+                   "invalid option");
 #if (GTK && !__APPLE__)
   char *buf;
   size_t len;
@@ -90,11 +91,11 @@ static int lp_read(lua_State *L) {
   if (!g_io_channel_get_buffered(p->cstdout))
     g_io_channel_set_buffered(p->cstdout, TRUE); // needed for functions below
   if (!lua_isnumber(L, 2)) {
-    if (c == 'l' || c == 'L') {
+    if (*c == 'l' || *c == 'L') {
       GString *s = g_string_new(NULL);
       status = g_io_channel_read_line_string(p->cstdout, s, NULL, &error);
       len = s->len, buf = g_string_free(s, FALSE);
-    } else if (c == 'a') {
+    } else if (*c == 'a') {
       status = g_io_channel_read_to_end(p->cstdout, &buf, &len, &error);
       if (status == G_IO_STATUS_EOF) status = G_IO_STATUS_NORMAL;
     }
@@ -105,7 +106,7 @@ static int lp_read(lua_State *L) {
   }
   if ((g_io_channel_get_buffer_condition(p->cstdout) & G_IO_IN) == 0)
     g_io_channel_set_buffered(p->cstdout, FALSE); // needed for stdout callback
-  lua_pushlstring(L, buf, len - ((buf[len - 1] == '\n' && c == 'l') ? 1 : 0));
+  lua_pushlstring(L, buf, len - ((buf[len - 1] == '\n' && *c == 'l') ? 1 : 0));
   free(buf);
   if (status != G_IO_STATUS_NORMAL) {
     lua_pushnil(L);
@@ -120,8 +121,8 @@ static int lp_read(lua_State *L) {
     luaL_buffinit(L, &buf);
     char ch;
     while ((n = read(p->fstdout, &ch, 1)) > 0) {
-      if (ch != '\n' || c == 'L' || c == 'a') luaL_addchar(&buf, ch), len++;
-      if (ch == '\n' && c != 'a') break;
+      if (ch != '\n' || *c == 'L' || *c == 'a') luaL_addchar(&buf, ch), len++;
+      if (ch == '\n' && *c != 'a') break;
     }
     if (n < 0 && len == 0) len = n;
     luaL_pushresult(&buf);

@@ -26,8 +26,8 @@ function wait(proc) end
 -- function passed to `spawn()` will not be called until the stdout buffer is
 -- clear.
 -- @param proc A process created by `spawn()`.
--- @param arg Optional argument similar to those in Lua's `io.read()`, but "*n"
---   is not supported. The default value is "*l", which reads a line.
+-- @param arg Optional argument similar to those in Lua's `io.read()`, but "n"
+--   is not supported. The default value is "l", which reads a line.
 -- @return string of bytes read
 function read(proc, arg) end
 
