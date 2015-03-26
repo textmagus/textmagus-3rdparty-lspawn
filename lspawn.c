@@ -168,7 +168,7 @@ static int lp_close(lua_State *L) {
 /** p:kill() Lua function. */
 static int lp_kill(lua_State *L) {
   PStream *p = (PStream *)luaL_checkudata(L, 1, "ta_spawn");
-  if (p->pid) kill(p->pid, SIGKILL);
+  if (p->pid) kill(p->pid, luaL_optinteger(L, 2, SIGKILL));
   return 0;
 }
 

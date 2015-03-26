@@ -44,6 +44,8 @@ function write(proc, ...) end
 function close(proc) end
 
 ---
--- Kills running process *proc*.
+-- Kills running process *proc*, or sends it Unix signal *signal*.
 -- @param proc A running process created by `spawn()`.
-function kill(proc) end
+-- @param signal Optional Unix signal to send to *proc*. The default value is 9
+--   (`SIGKILL`), which kills the process.
+function kill(proc, signal) end
