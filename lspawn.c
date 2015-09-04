@@ -309,6 +309,7 @@ int lspawn_readfds(lua_State *L) {
       luaL_unref(L, LUA_REGISTRYINDEX, p->stdout_cb);
       luaL_unref(L, LUA_REGISTRYINDEX, p->stderr_cb);
       luaL_unref(L, LUA_REGISTRYINDEX, p->exit_cb);
+      luaL_unref(L, LUA_REGISTRYINDEX, p->ref); // allow proc to be collected
       p->pid = 0;
       lua_pushnil(L), lua_replace(L, -2), lua_settable(L, -3); // t[proc] = nil
       lua_pushnil(L); // push nil for next call to lua_next()
