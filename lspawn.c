@@ -414,7 +414,7 @@ static int spawn(lua_State *L) {
                                &p->fstderr, &error)) {
     p->cstdout = new_channel(p->fstdout, p, p->stdout_cb > 0);
     p->cstderr = new_channel(p->fstderr, p, p->stderr_cb > 0);
-    g_child_watch_add(p->pid, p_exit, p);
+    g_child_watch_add_full(G_PRIORITY_DEFAULT + 1, p->pid, p_exit, p, NULL);
     lua_pushnil(L);
   } else {
     lua_pushnil(L);
