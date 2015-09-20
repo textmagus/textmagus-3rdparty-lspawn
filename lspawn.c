@@ -1,5 +1,8 @@
 // Copyright 2012-2015 Mitchell mitchell.att.foicica.com. See LICENSE.
 
+#if (!GTK && __linux__)
+#define _GNU_SOURCE 1 // for execvpe from unistd.h
+#endif
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
@@ -376,6 +379,20 @@ static int spawn(lua_State *L) {
   argv[argc] = NULL;
   lua_pop(L, 1); // argv
 #endif
+  int envn = 0;
+  char **envp = NULL;
+  if (lua_istable(L, 3)) {
+    envn = lua_rawlen(L, 3), envp = malloc((envn + 1) * sizeof(char *));
+    for (int i = 0; i < envn; i++) {
+      lua_rawgeti(L, 3, i + 1);
+      size_t len = lua_rawlen(L, -1);
+      char *pair = malloc(len + 1);
+      strcpy(pair, lua_tostring(L, -1)), pair[len] = '\0';
+      envp[i] = pair;
+      lua_pop(L, 1); // pair
+    }
+    envp[envn] = NULL;
+  }
 #else
   lua_pushstring(L, getenv("COMSPEC"));
   lua_pushstring(L, " /c ");
@@ -387,13 +404,29 @@ static int spawn(lua_State *L) {
                       sizeof(argv));
   MultiByteToWideChar(GetACP(), 0, lua_tostring(L, 2), -1, (LPWSTR)&cwd,
                       MAX_PATH);
+  char *envp = NULL;
+  if (lua_istable(L, 3)) {
+    luaL_Buffer buf;
+    luaL_buffinit(L, &buf);
+    for (int i = 0; i < lua_rawlen(L, 3); i++) {
+      lua_rawgeti(L, 3, i + 1);
+      luaL_addstring(&buf, lua_tostring(L, -1)), luaL_addchar(&buf, '\0');
+      lua_pop(L, 1); // pair
+    }
+    luaL_addchar(&buf, '\0');
+    luaL_pushresult(&buf);
+    envp = malloc(lua_rawlen(L, -1) * sizeof(char));
+    memcpy(envp, lua_tostring(L, -1), lua_rawlen(L, -1));
+    lua_pop(L, 1); // buf
+  }
 #endif
-  lua_settop(L, 5); // ensure 5 values so userdata to be pushed is 6th
+  lua_settop(L, 6); // ensure 6 values so userdata to be pushed is 7th
 
   PStream *p = (PStream *)lua_newuserdata(L, sizeof(PStream));
   p->L = L, p->ref = 0;
-  p->stdout_cb = l_reffunction(L, 3), p->stderr_cb = l_reffunction(L, 4);
-  p->exit_cb = l_reffunction(L, 5);
+  p->stdout_cb = l_reffunction(L, !envp ? 3 : 4);
+  p->stderr_cb = l_reffunction(L, !envp ? 4 : 5);
+  p->exit_cb = l_reffunction(L, !envp ? 5 : 6);
   if (luaL_newmetatable(L, "ta_spawn")) {
     l_setcfunction(L, -1, "status", lp_status);
     l_setcfunction(L, -1, "wait", lp_wait);
@@ -409,13 +442,13 @@ static int spawn(lua_State *L) {
 #if !_WIN32
 #if (GTK && !__APPLE__)
   GSpawnFlags flags = G_SPAWN_DO_NOT_REAP_CHILD | G_SPAWN_SEARCH_PATH;
-  if (g_spawn_async_with_pipes(lua_tostring(L, 2), argv, NULL, flags, NULL,
+  if (g_spawn_async_with_pipes(lua_tostring(L, 2), argv, envp, flags, NULL,
                                NULL, &p->pid, &p->fstdin, &p->fstdout,
                                &p->fstderr, &error)) {
     p->cstdout = new_channel(p->fstdout, p, p->stdout_cb > 0);
     p->cstderr = new_channel(p->fstderr, p, p->stderr_cb > 0);
     g_child_watch_add_full(G_PRIORITY_DEFAULT + 1, p->pid, p_exit, p, NULL);
-    lua_pushnil(L);
+    lua_pushnil(L); // no error
   } else {
     lua_pushnil(L);
     lua_pushfstring(L, "%s: %s", lua_tostring(L, 1), error->message);
@@ -437,7 +470,7 @@ static int spawn(lua_State *L) {
       // spawn_procs is of the form: t[proc] = true
       lua_pushvalue(L, -2), lua_pushboolean(L, 1), lua_settable(L, -3);
       lua_pop(L, 1); // spawn_procs
-      lua_pushnil(L);
+      lua_pushnil(L); // no error
 #if (GTK && __APPLE__)
       // On GTK-OSX, manually monitoring spawned fds prevents the fd polling
       // aborts caused by GLib.
@@ -455,7 +488,12 @@ static int spawn(lua_State *L) {
                 strerror(errno));
         exit(EXIT_FAILURE);
       }
+#if __linux__
+      execvpe(argv[0], argv, envp); // does not return on success
+#else
+      environ = envp;
       execvp(argv[0], argv); // does not return on success
+#endif
       fprintf(stderr, "Failed to execute child process \"%s\" (%s)", argv[0],
               strerror(errno));
     }
@@ -468,6 +506,10 @@ static int spawn(lua_State *L) {
   }
   for (int i = 0; i < argc; i++) free(argv[i]);
   free(argv);
+  if (envp) {
+    for (int i = 0; i < envn; i++) free(envp[i]);
+    free(envp);
+  }
 #endif
 #else
 #if GTK
@@ -494,6 +536,7 @@ static int spawn(lua_State *L) {
   SetHandleInformation(proc_stderr, HANDLE_FLAG_INHERIT, 0);
 
   // Spawn with pipes and no window.
+  // TODO: CREATE_UNICODE_ENVIRONMENT?
   STARTUPINFOW startup_info = {
     sizeof(STARTUPINFOW), NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, 0,
     STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES, SW_HIDE, 0, 0, stdin_read,
@@ -501,7 +544,7 @@ static int spawn(lua_State *L) {
   };
   PROCESS_INFORMATION proc_info = {0, 0, 0, 0};
   if (CreateProcessW(NULL, argv, NULL, NULL, TRUE, CREATE_NEW_PROCESS_GROUP,
-                     NULL, *cwd ? cwd : NULL, &startup_info, &proc_info)) {
+                     envp, *cwd ? cwd : NULL, &startup_info, &proc_info)) {
     p->pid = proc_info.hProcess;
     p->fstdin = proc_stdin, p->fstdout = proc_stdout, p->fstderr = proc_stderr;
     p->cstdout = new_channel(FD(proc_stdout), p, p->stdout_cb > 0);
@@ -511,7 +554,7 @@ static int spawn(lua_State *L) {
     CloseHandle(proc_info.hThread);
     CloseHandle(stdin_read);
     CloseHandle(stdout_write), CloseHandle(stderr_write);
-    lua_pushnil(L);
+    lua_pushnil(L); // no error
   } else {
     char *message = NULL;
     FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
@@ -522,6 +565,7 @@ static int spawn(lua_State *L) {
     lua_pushfstring(L, "%s: %s", lua_tostring(L, 1), message);
     LocalFree(message);
   }
+  if (envp) free(envp);
 #else
   luaL_error(L, "not implemented in this environment");
 #endif
