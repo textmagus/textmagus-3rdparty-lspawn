@@ -491,6 +491,7 @@ static int spawn(lua_State *L) {
 #if __linux__
       execvpe(argv[0], argv, envp); // does not return on success
 #else
+      extern char **environ;
       environ = envp;
       execvp(argv[0], argv); // does not return on success
 #endif
