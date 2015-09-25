@@ -9,8 +9,7 @@
 -- @param env Optional list of environment variables for the child process.
 --   Each element in the list is a 'KEY=VALUE' string. The default value is
 --   `nil`, which inherits the parent's environment.
---   This parameter may be omitted completely, even if subsequent parameters are
---   given.
+--   This parameter should be omitted completely instead of specifying `nil`.
 -- @param stdout_cb Optional Lua function that accepts a string parameter for a
 --   block of standard output read from the child. Stdout is read asynchronously
 --   in 1KB or 0.5KB blocks (depending on the platform), or however much data is
