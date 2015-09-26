@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3 (26 Sep 2015)
+
+* Fixed small memory leak on OSX and the terminal.
+* Ensure stdout and stderr callbacks are run before process exit.
+* The environment of child processes can be specified.
+
 ## 1.2 (01 Apr 2015)
 
 * Leading '*' in `proc:read()` argument is optional, like in Lua 5.3.
