@@ -1,4 +1,4 @@
-// Copyright 2012-2015 Mitchell mitchell.att.foicica.com. See LICENSE.
+// Copyright 2012-2016 Mitchell mitchell.att.foicica.com. See LICENSE.
 
 #if (!GTK && __linux__)
 #define _GNU_SOURCE 1 // for execvpe from unistd.h
