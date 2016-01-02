@@ -33,6 +33,11 @@ function read(proc, arg) end
 
 ---
 -- Writes string input to the stdin of process *proc*.
+-- Note: On Linux, if more than 65536 bytes (64K) are to be written, it is
+-- possible those bytes need to be written in 65536-byte (64K) chunks, or the
+-- process may not receive all input. However, it is also possible that there is
+-- a limit on how many bytes can be written in a short period of time, perhaps
+-- 196608 bytes (192K).
 -- @param proc A process created by `spawn()`.
 -- @param ... Standard input for *proc*.
 function write(proc, ...) end
