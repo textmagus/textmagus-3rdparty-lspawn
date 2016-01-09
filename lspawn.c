@@ -331,7 +331,7 @@ static int monitoring_fds = 0;
  */
 static int monitor_fds(void *data) {
   lua_State *L = (lua_State *)data;
-  struct timeval timeout = {0, 0};
+  struct timeval timeout = {0, 1e5}; // 0.1s
   int nfds = lspawn_pushfds(L);
   fd_set *fds = (fd_set *)lua_touserdata(L, -1);
   if (select(nfds, fds, NULL, NULL, &timeout) > 0) lspawn_readfds(L);
