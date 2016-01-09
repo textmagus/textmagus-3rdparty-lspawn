@@ -497,6 +497,7 @@ static int spawn(lua_State *L) {
 #endif
       fprintf(stderr, "Failed to execute child process \"%s\" (%s)", argv[0],
               strerror(errno));
+      exit(EXIT_FAILURE);
     }
   } else {
     if (pstdin[0] >= 0) close(pstdin[0]), close(pstdin[1]);
