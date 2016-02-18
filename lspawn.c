@@ -186,6 +186,18 @@ static int lp_tostring(lua_State *L) {
 }
 
 #if (GTK && !__APPLE__)
+/** __gc Lua metamethod. */
+static int lp_gc(lua_State *L) {
+  PStream *p = (PStream *)luaL_checkudata(L, 1, "ta_spawn");
+  if (p->pid) {
+    // lua_close() was called, forcing GC. Disconnect listeners since GTK is
+    // still running and may try to invoke callbacks.
+    g_source_remove_by_user_data(p); // disconnect cstdout watch
+    g_source_remove_by_user_data(p); // disconnect cstderr watch
+    g_source_remove_by_user_data(p); // disconnect child watch
+  }
+}
+
 /** Signal that channel output is available for reading. */
 static int ch_read(GIOChannel *source, GIOCondition cond, void *data) {
   PStream *p = (PStream *)data;
@@ -435,6 +447,9 @@ static int spawn(lua_State *L) {
     l_setcfunction(L, -1, "close", lp_close);
     l_setcfunction(L, -1, "kill", lp_kill);
     l_setcfunction(L, -1, "__tostring", lp_tostring);
+#if (GTK && !__APPLE__)
+    l_setcfunction(L, -1, "__gc", lp_gc);
+#endif
     lua_pushvalue(L, -1), lua_setfield(L, -2, "__index");
   }
   lua_setmetatable(L, -2);
