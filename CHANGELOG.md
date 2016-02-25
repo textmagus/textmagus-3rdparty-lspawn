@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4 (25 Feb 2016)
+
+* Exit immediately if the child process fails to start.
+* Do not "busy wait" for spawned stdout or stderr on OSX.
+* Only change environment of child processes on OSX if an environment was
+  specified.
+* Fix memory access error by disconnecting GTK listeners when `lua_close()` has
+  been called.
+
 ## 1.3 (26 Sep 2015)
 
 * Fixed small memory leak on OSX and the terminal.
