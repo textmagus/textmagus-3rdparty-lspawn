@@ -503,10 +503,11 @@ static int spawn(lua_State *L) {
                 strerror(errno));
         exit(EXIT_FAILURE);
       }
+      extern char **environ;
 #if __linux__
+      if (!envp) envp = environ;
       execvpe(argv[0], argv, envp); // does not return on success
 #else
-      extern char **environ;
       if (envp) environ = envp;
       execvp(argv[0], argv); // does not return on success
 #endif
