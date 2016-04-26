@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5 (26 Apr 2016)
+
+* Fixed lack of environment in Linux.
+
 ## 1.4 (25 Feb 2016)
 
 * Exit immediately if the child process fails to start.
