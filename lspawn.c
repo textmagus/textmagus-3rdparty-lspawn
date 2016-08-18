@@ -87,10 +87,10 @@ static int lp_read(lua_State *L) {
   luaL_argcheck(L, *c == 'l' || *c == 'L' || *c == 'a' || lua_isnumber(L, 2), 2,
                    "invalid option");
 #if (GTK && !__APPLE__)
-  char *buf;
-  size_t len;
+  char *buf = NULL;
+  size_t len = 0;
   GError *error = NULL;
-  GIOStatus status;
+  GIOStatus status = G_IO_STATUS_NORMAL;
   if (!g_io_channel_get_buffered(p->cstdout))
     g_io_channel_set_buffered(p->cstdout, TRUE); // needed for functions below
   if (!lua_isnumber(L, 2)) {
@@ -196,6 +196,7 @@ static int lp_gc(lua_State *L) {
     g_source_remove_by_user_data(p); // disconnect cstderr watch
     g_source_remove_by_user_data(p); // disconnect child watch
   }
+  return 0;
 }
 
 /** Signal that channel output is available for reading. */
@@ -253,6 +254,7 @@ static void p_exit(GPid pid, int status, void *data) {
   luaL_unref(p->L, LUA_REGISTRYINDEX, p->exit_cb);
   luaL_unref(p->L, LUA_REGISTRYINDEX, p->ref); // allow proc to be collected
   p->pid = 0;
+  (void)pid; // UNUSED
 }
 #elif !_WIN32
 /**
