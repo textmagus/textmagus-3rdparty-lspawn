@@ -1,7 +1,7 @@
 # Copyright 2012-2016 Mitchell mitchell.att.foicica.com. See LICENSE.
 
 CC = gcc
-lspawn_flags = -std=c99 -pedantic -fpic -D_XOPEN_SOURCE -Wall
+lspawn_flags = -std=c99 -pedantic -fpic -D_XOPEN_SOURCE -W -Wall -Wno-unused
 ifdef GLIB
   plat_flags = -DGTK $(shell pkg-config --cflags glib-2.0)
   plat_libs = $(shell pkg-config --libs glib-2.0)
