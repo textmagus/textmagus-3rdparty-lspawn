@@ -2,8 +2,8 @@
 
 ---
 -- Spawns an interactive child process in a separate thread.
--- @param argv A command line string containing the program's name followed by
---   arguments to pass to it. `PATH` is searched for program names.
+-- @param argv A command line string that contains the program's name followed
+--   by arguments to pass to it. `PATH` is searched for program names.
 -- @param working_dir Optional current working directory (cwd) for the child
 --   process. The default value is `nil`, which inherits the parent's cwd.
 -- @param env Optional list of environment variables for the child process.
